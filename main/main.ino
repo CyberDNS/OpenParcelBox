@@ -1,5 +1,7 @@
 #include "secrets.h"
 
+#include <NtpClientLib.h>
+
 #include <ArduinoJson.h>
 
 #include <Adafruit_GFX.h>
@@ -11,14 +13,12 @@
 #include <splash.h>
 
 #include <ESP8266WiFi.h>
+#include <PubSubClient.h>
 
 #include <Servo.h>
 #include <SPI.h>
 #include <Wire.h>
 #include <Fonts/FreeSansBold12pt7b.h>
-
-#include <Adafruit_MQTT.h>
-#include <Adafruit_MQTT_Client.h>
 
 #include <Key.h>
 #include <Keypad.h>
@@ -89,29 +89,34 @@ char ssid[] = WIFI_SSID;
 char pass[] = WIFI_PASSWORD;
 int status = WL_IDLE_STATUS;
 
-WiFiClient client;
+WiFiClient espClient;
 
 /* ------------------------------------------- */
 /* INI MQTT                                    */
 /* ------------------------------------------- */
 
-Adafruit_MQTT_Client mqtt(&client, MQTT_SERVER, MQTT_SERVERPORT, MQTT_CID, MQTT_USERNAME, MQTT_KEY);
-Adafruit_MQTT_Subscribe full_open_pins_subscribe = Adafruit_MQTT_Subscribe(&mqtt, "openparcelbox/full_open_pins");
-Adafruit_MQTT_Subscribe half_open_pins_subscribe = Adafruit_MQTT_Subscribe(&mqtt, "openparcelbox/half_open_pins");
+PubSubClient mqtt(espClient);
 
-Adafruit_MQTT_Subscribe do_full_open_subscribe = Adafruit_MQTT_Subscribe(&mqtt, "openparcelbox/do_full_open");
-Adafruit_MQTT_Subscribe do_half_open_subscribe = Adafruit_MQTT_Subscribe(&mqtt, "openparcelbox/do_half_open");
 
-Adafruit_MQTT_Publish last_full_open_by_publish = Adafruit_MQTT_Publish(&mqtt, "openparcelbox/last_full_open_by");
-Adafruit_MQTT_Publish last_half_open_by_publish = Adafruit_MQTT_Publish(&mqtt, "openparcelbox/last_half_open_by");
+/* ------------------------------------------- */
+/* INI Time                                    */
+/* ------------------------------------------- */
+
+int8_t timeZone = 1;
+int8_t minutesTimeZone = 0;
+const PROGMEM char *ntpServer = "pool.ntp.org";
 
 /* ------------------------------------------- */
 /* INI                                         */
 /* ------------------------------------------- */
 
 char half_open_pins[10][PINCODE_LENGTH + 1];
+char half_open_identifiers[10][21];
+
 char full_open_pins[2][PINCODE_LENGTH + 1];
-const char admin_code_menu[PINCODE_LENGTH + 1] = "111111";
+char full_open_identifiers[2][21];
+
+const char admin_code_menu[PINCODE_LENGTH + 1] = "763548";
 
 char input_keypad_buffer[PINCODE_LENGTH + 1];
 char input_keypad_last_key_pressed = '\0';
@@ -142,15 +147,9 @@ void setup()
   Serial.begin(9600);
   Serial.println("Setup started...");
 
-  do_full_open_subscribe.setCallback(do_full_open_Callback);
-  mqtt.subscribe(&do_full_open_subscribe);
-  do_half_open_subscribe.setCallback(do_half_open_Callback);
-  mqtt.subscribe(&do_half_open_subscribe);
-
-  full_open_pins_subscribe.setCallback(full_open_pins_Callback);
-  mqtt.subscribe(&full_open_pins_subscribe);
-  half_open_pins_subscribe.setCallback(half_open_pins_Callback);
-  mqtt.subscribe(&half_open_pins_subscribe);
+  setup_wifi();
+  mqtt.setServer(MQTT_SERVER, MQTT_SERVERPORT);
+  mqtt.setCallback(callback);
 
   setAction(INI);
 
@@ -161,10 +160,10 @@ void setup()
 
 void loop()
 {
-  startWiFiClient();
-
-  MQTT_connect();
-  mqtt.processPackets(100);
+  if (!mqtt.connected()) {
+    reconnect();
+  }
+  mqtt.loop();
 
   action_changed_processed = true;
 
@@ -175,6 +174,81 @@ void loop()
   if (action_changed_processed)
   {
     action_changed = false;
+  }
+}
+
+void setup_wifi() {
+
+  delay(10);
+  // We start by connecting to a WiFi network
+  Serial.println();
+  Serial.print("Connecting to ");
+  Serial.println(ssid);
+
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+
+  Serial.println("");
+  Serial.println("WiFi connected");
+  Serial.println("IP address: ");
+  Serial.println(WiFi.localIP());
+}
+
+void callback(char* topic, byte* payload, unsigned int length) 
+{
+  payload[length] = '\0';
+  String s = String((char*)payload);
+  const char *data = s.c_str();
+
+  Serial.print("Message received: [");
+  Serial.print(topic);
+  Serial.print("] ");
+  Serial.println(data);
+
+  if (strcmp(topic, "openparcelbox/full_open_pins") == 0)
+  {
+    receive_pin_codes(data, full_open_pins, full_open_identifiers, 2);
+  }
+  else if (strcmp(topic, "openparcelbox/half_open_pins") == 0)
+  {
+    receive_pin_codes(data, half_open_pins, half_open_identifiers, 10);
+  }
+  else if (strcmp(topic, "openparcelbox/do_full_open") == 0)
+  {
+    if (strcmp(data, "True") == 0)
+    {
+      mqtt.publish("openparcelbox/last_full_open_by", "MQTT");
+      setAction(OPEN_ALL_BOX);
+    }
+  }
+  else if (strcmp(topic, "openparcelbox/do_half_open") == 0)
+  {
+    if (strcmp(data, "True") == 0)
+    {
+      mqtt.publish("openparcelbox/last_half_open_by", "MQTT");
+      setAction(OPEN_ALL_BOX);
+    }
+  }
+}
+
+void reconnect() {
+  while (!mqtt.connected()) {
+    Serial.print("Attempting MQTT connection...");
+    if (mqtt.connect(MQTT_CID, MQTT_USERNAME, MQTT_KEY)) {
+      Serial.println("connected");
+      mqtt.subscribe("openparcelbox/#");
+    } else {
+      Serial.print("failed, rc=");
+      Serial.print(mqtt.state());
+      Serial.println(" try again in 5 seconds");
+
+      delay(5000);
+    }
   }
 }
 
@@ -246,6 +320,9 @@ void processIni()
 {
   Serial.println("Initializing...");
 
+  NTP.setInterval(63);
+  NTP.begin(ntpServer, timeZone, true, minutesTimeZone);
+
   Wire.begin(PIN_SDA, PIN_SCL);
 
   if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C))
@@ -271,18 +348,31 @@ void processCode()
 
   if (strlen(input_keypad_buffer) == confirm_length)
   {
+    Serial.println("Checking code...");
     if (strcmp(input_keypad_buffer, admin_code_menu) == 0)
     {
       //setAction(MENU);
     }
     else if (isCodeOk(input_keypad_buffer, half_open_pins, 10))
     {
-      last_half_open_by_publish.publish(input_keypad_buffer);
+      char date_time[17];
+      sprintf(date_time, "%s %s", NTP.getDateStr().c_str(), NTP.getTimeStr().c_str());
+
+      char topic[60];   
+      sprintf(topic, "%s%s", "openparcelbox/half_open_state/", getIdentifier(input_keypad_buffer, half_open_pins, half_open_identifiers, 10));
+
+      mqtt.publish(topic, date_time);
       setAction(OPEN_PARCEL_BOX);
     }
     else if (isCodeOk(input_keypad_buffer, full_open_pins, 2))
     {
-      last_full_open_by_publish.publish(input_keypad_buffer);
+      char date_time[17];
+      sprintf(date_time, "%s %s", NTP.getDateStr().c_str(), NTP.getTimeStr().c_str());
+
+      char topic[60];   
+      sprintf(topic, "%s%s", "openparcelbox/full_open_state/", getIdentifier(input_keypad_buffer, full_open_pins, full_open_identifiers, 2));
+
+      mqtt.publish(topic, date_time);
       setAction(OPEN_ALL_BOX);
     }
     else
@@ -305,6 +395,19 @@ bool isCodeOk(char *code, char inputList[][PINCODE_LENGTH + 1], size_t rows)
   }
 
   return false;
+}
+
+char* getIdentifier(char *code,char inputList[][PINCODE_LENGTH + 1], char identifiers[][21], size_t rows)
+{
+  for (int i = 0; i < rows; i++)
+  {
+    if (strcmp(inputList[i], code) == 0)
+    {
+      return identifiers[i];
+    }
+  }
+
+  return '\0';
 }
 
 void processMenu()
@@ -377,6 +480,7 @@ void outputMessage()
 
   display.display();
 }
+
 
 void outputCode()
 {
@@ -527,106 +631,25 @@ void showMessage(const __FlashStringHelper *msg, byte clbk)
   setAction(MESSAGE);
 }
 
-void startWiFiClient()
-{
-  // Stop if already connected.
-  if (WiFi.localIP().toString() != "(IP unset)")
-  {
-    return;
-  }
-
-  while (WiFi.localIP().toString() == "(IP unset)")
-  {
-    Serial.print("Attempting to connect to WPA SSID: ");
-    Serial.println(ssid);
-    Serial.println(status);
-    // Connect to WPA/WPA2 network:
-    status = WiFi.begin(ssid, pass);
-
-    // wait 10 seconds for connection:
-    delay(10000);
-  }
-
-  Serial.print("You're connected to the network");
-  Serial.println("IP address: " + WiFi.localIP().toString());
-}
-
-
-void MQTT_connect()
-{
-  int8_t ret;
-
-  // Stop if already connected.
-  if (mqtt.connected())
-  {
-    return;
-  }
-
-  Serial.println("Connecting to MQTT...");
-
-  uint8_t retries = 3;
-  while ((ret = mqtt.connect()) != 0)
-  { // connect will return 0 for connected
-    Serial.println(mqtt.connectErrorString(ret));
-    Serial.println("Retrying MQTT connection in 10 seconds...");
-    mqtt.disconnect();
-    delay(10000); // wait 10 seconds
-    retries--;
-    if (retries == 0)
-    {
-      // basically die and wait for WDT to reset me
-      while (1)
-        ;
-    }
-  }
-  Serial.println("MQTT Connected!");
-}
-
-
-void full_open_pins_Callback(char *data, uint16_t len)
-{
-  receive_pin_codes(data, full_open_pins, 2);
-}
-
-void half_open_pins_Callback(char *data, uint16_t len)
-{
-  receive_pin_codes(data, half_open_pins, 10);
-}
-
-void receive_pin_codes(char *data, char destination[][PINCODE_LENGTH + 1], size_t num)
+void receive_pin_codes(const char *data, char pins[][PINCODE_LENGTH + 1], char identifiers[][21], size_t num)
 {
   Serial.print("Data received: ");
   Serial.println(data);
 
   for(int i = 0; i < num; i++)
   { 
-    strcpy(destination[i], "\0");
+    strcpy(pins[i], "\0");
+    strcpy(identifiers[i], "\0");
   }
 
-  DynamicJsonDocument doc(200);
+  DynamicJsonDocument doc(2000);
   deserializeJson(doc, data);
   JsonArray array = doc.as<JsonArray>();
 
   int i = 0;
   for(JsonVariant v : array) {
-    strcpy(destination[i++], v.as<String>().c_str());
-  }
-}
-
-void do_full_open_Callback(char *data, uint16_t len)
-{
-  if (strcmp(data, "True") == 0)
-  {
-    last_full_open_by_publish.publish("MQTT");
-    setAction(OPEN_ALL_BOX);
-  }
-}
-
-void do_half_open_Callback(char *data, uint16_t len)
-{ 
-  if (strcmp(data, "True") == 0)
-  {
-    last_half_open_by_publish.publish("MQTT");
-    setAction(OPEN_PARCEL_BOX);
+    strcpy(pins[i], v["pin"].as<String>().c_str());
+    strcpy(identifiers[i], v["id"].as<String>().c_str());
+    i++;
   }
 }

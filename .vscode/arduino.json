@@ -1,6 +1,6 @@
 {
     "board": "esp8266:esp8266:nodemcuv2",
-    "port": "COM5",
+    "port": "/dev/tty.usbserial-0001",
     "sketch": "main\\main.ino",
     "output": "../ArduinoOutput",
     "programmer": "AVRISP mkII",

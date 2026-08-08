@@ -1,0 +1,6 @@
+#pragma once
+
+// Names shown on the home screen (bottom-left corner).
+// Newline-separated for multiple residents.
+// Copy this file to building_config.h and fill in the names for your installation.
+#define BUILDING_RESIDENTS "Resident One\nResident Two"

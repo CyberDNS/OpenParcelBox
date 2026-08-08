@@ -13,7 +13,7 @@ An ESP32-S3 smart parcel box with a touchscreen UI, PIN and BLE unlock, MQTT/Hom
 - **BLE unlock** — allowlist of up to 8 device MAC addresses; no PIN required
 - **Home Assistant integration** — MQTT command topic triggers open; MQTT Discovery registers two entities automatically (access event + last-opened sensor)
 - **Access logging** — access, denied, and error logs stored on-device (LittleFS) and mirrored in full to MQTT retained topics
-- **Encrypted credential storage** — WiFi and MQTT passwords stored on-device using AES-256-CBC with a key derived from the chip's unique eFuse MAC
+- **Encrypted credential storage** — WiFi and MQTT passwords are stored encrypted on-device
 - **Hidden admin entry** — long-press the firmware version label (bottom-right, 3 s) to reach the admin PIN screen and settings
 
 ## Getting Started

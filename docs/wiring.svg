@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="900" height="690" viewBox="0 0 900 690" font-family="Helvetica, Arial, sans-serif">
 <rect width="900" height="690" fill="#ffffff"/>
-<text x="450" y="30" text-anchor="middle" font-size="18" font-weight="bold" fill="#202124">OpenParcelBox2 wiring — Waveshare ESP32-S3-Touch-LCD-3.5 header</text>
+<text x="450" y="30" text-anchor="middle" font-size="18" font-weight="bold" fill="#202124">OpenParcelBox wiring — Waveshare ESP32-S3-Touch-LCD-3.5 header</text>
 <g transform="translate(0,50)">
 <rect x="438" y="14" width="44" height="22" rx="2" fill="#ffffff" stroke="#202124" stroke-width="1.5"/>
 <rect x="446" y="21" width="8" height="8" fill="#202124"/><rect x="466" y="21" width="8" height="8" fill="#202124"/>

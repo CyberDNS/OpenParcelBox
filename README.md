@@ -1,4 +1,4 @@
-# OpenParcelBox2
+# OpenParcelBox
 
 An ESP32-S3 smart parcel box with a touchscreen UI, PIN and BLE unlock, MQTT/Home Assistant integration, and a servo-controlled latch — built for a shared residential building.
 
@@ -34,8 +34,8 @@ An ESP32-S3 smart parcel box with a touchscreen UI, PIN and BLE unlock, MQTT/Hom
 
 ```bash
 # Clone
-git clone https://github.com/CyberDNS/OpenParcelBox2.git
-cd OpenParcelBox2
+git clone https://github.com/CyberDNS/OpenParcelBox.git
+cd OpenParcelBox
 
 # Copy and edit the per-installation config
 cp include/building_config.h.example include/building_config.h

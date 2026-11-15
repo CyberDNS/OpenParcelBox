@@ -22,7 +22,7 @@ static const uint8_t kQueueDepth = 8;
 
 void setup() {
     Serial.begin(115200);
-    Serial.printf("OpenParcelBox2 firmware %s\n", FIRMWARE_VERSION);
+    Serial.printf("OpenParcelBox firmware %s\n", FIRMWARE_VERSION);
 
     // Before the LittleFS.begin() check below, so a mount failure itself
     // can be reported through logError() rather than only Serial.

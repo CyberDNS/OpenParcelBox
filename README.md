@@ -5,13 +5,20 @@ An ESP32-S3 smart parcel box with a touchscreen UI, PIN and BLE unlock, MQTT/Hom
 ## Hardware
 
 - **[Waveshare ESP32-S3-Touch-LCD-3.5](https://www.waveshare.com/esp32-s3-touch-lcd-3.5.htm)** — ESP32-S3, 3.5" ST7796 touchscreen, FT6336 touch controller, AXP2101 power management
-- **Servo** — controls the latch; two positions: parcel-only compartment and full open (parcel + letter)
+- **Servo** — controls the latch; two positions: parcel-only compartment and full open (parcel + letter). Signal on GPIO21; powered from an external supply (share its GND with the board)
+- **Letter flap contact** — magnetic reed contact wired between GPIO17 (header pin 16) and GND; see `include/letter_flap_config.h`
+
+### Wiring
+
+![Wiring diagram](docs/wiring.svg)
 
 ## Features
 
 - **PIN entry** on the touchscreen — up to 16 PIN codes, each scoped to parcel-only or full open
 - **BLE unlock** — allowlist of up to 8 device MAC addresses; no PIN required
 - **Home Assistant integration** — MQTT command topic triggers open; MQTT Discovery registers two entities automatically (access event + last-opened sensor)
+- **Letter flap sensor** — reports the flap as open/closed to Home Assistant
+- **Inbox list** — records every letter-flap opening and parcel-only opening since the box was last emptied; a full opening clears it
 - **Access logging** — access, denied, and error logs stored on-device (LittleFS) and mirrored in full to MQTT retained topics
 - **Encrypted credential storage** — WiFi and MQTT passwords are stored encrypted on-device
 - **Hidden admin entry** — long-press the firmware version label (bottom-right, 3 s) to reach the admin PIN screen and settings
@@ -86,11 +93,45 @@ Publish a JSON payload to `openparcelbox/config` (retained):
 | `openparcelbox/command/open` | → device | `"parcel"` or `"full"` — opens without PIN check |
 | `openparcelbox/access/event` | device → | Fires on every successful open (HA Event entity) |
 | `openparcelbox/access/last` | device → | Last opened-by string, retained (HA Sensor entity) |
+| `openparcelbox/letter_flap` | device → | `"open"` / `"closed"`, retained (HA Binary Sensor) |
+| `openparcelbox/inbox` | device → | Deliveries since the last full opening, retained (HA Sensor — see below) |
 | `openparcelbox/log/access` | device → | Full access log, retained |
 | `openparcelbox/log/denied` | device → | Full denied-access log, retained |
 | `openparcelbox/log/error` | device → | Full error log, retained |
 
 Home Assistant MQTT Discovery is published automatically on connect — no manual HA configuration needed.
+
+### Inbox
+
+The **Inbox** sensor's state is the number of deliveries since the last full opening. The list itself is in the sensor's attributes:
+
+```json
+{
+  "count": 2,
+  "letters": 1,
+  "parcels": 1,
+  "since": "2026-11-14T07:12:03Z",
+  "items": [
+    { "time": "2026-11-14T09:30:11Z", "type": "letter" },
+    { "time": "2026-11-14T11:02:45Z", "type": "parcel", "by": "Courier DHL" }
+  ]
+}
+```
+
+- A letter-flap opening adds a `letter` entry. Openings less than 5 s apart count as one.
+- A parcel-only opening (PIN, BLE, or HA button) adds a `parcel` entry with who opened it.
+- A full opening clears the list and sets `since`.
+- `items` keeps the newest 20 entries; the counts keep going past that. Times are UTC.
+
+Example Lovelace Markdown card:
+
+```yaml
+type: markdown
+content: >
+  {% for i in state_attr('sensor.parcelbox_inbox', 'items') or [] %}
+  - {{ as_local(as_datetime(i.time)).strftime('%a %H:%M') }} — {{ i.type }}{{ ' (' ~ i.by ~ ')' if i.by }}
+  {% endfor %}
+```
 
 ## Servo Calibration
 

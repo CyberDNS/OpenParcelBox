@@ -18,6 +18,7 @@ enum class AppEvent {
     ACCESS_PARCELBOX_GRANTED,  // logic -> UI + servo: unlock
     ACCESS_PARCELBOX_DENIED,   // logic -> UI: bad PIN / not recognized
     CONFIG_UPDATED,            // configSync -> logic: reload config from LittleFS
+    LETTER_FLAP_CHANGED,       // letterFlap -> logic -> configSync: msg.flapOpen set
 };
 
 // Which compartment(s) a grant opens — same servo, different angle:
@@ -32,6 +33,7 @@ struct AppMessage {
     char pin[PIN_LENGTH + 1];             // only populated for PIN_SUBMITTED
     AccessScope scope;                    // only meaningful for ACCESS_PARCELBOX_GRANTED/DENIED
     char accessId[ACCESS_ID_MAX_LEN + 1]; // only populated for ACCESS_PARCELBOX_GRANTED
+    bool flapOpen;                        // only meaningful for LETTER_FLAP_CHANGED
 };
 
 // Kept short — this is one already-formatted log line ("<timestamp> <text>",
@@ -46,7 +48,8 @@ extern QueueHandle_t uiQueue;
 // logic -> servo
 extern QueueHandle_t servoQueue;
 // logic -> configSync: publish an MQTT event/state update (ACCESS_PARCELBOX_
-// GRANTED/DENIED, for the Home Assistant "who opened it" entities)
+// GRANTED/DENIED for the Home Assistant "who opened it" entities,
+// LETTER_FLAP_CHANGED for the letter flap binary sensor)
 extern QueueHandle_t mqttQueue;
 // log.cpp -> configSync: depth-1 "this file changed" signals (see
 // xQueueOverwrite in log.cpp). On seeing one, configSyncTask re-reads the

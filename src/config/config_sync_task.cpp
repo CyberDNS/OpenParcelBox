@@ -11,6 +11,7 @@
 #include "device_config.h"
 #include "../logging/log.h"
 #include "../logic/access_control.h"
+#include "../logic/inbox.h"
 
 // UTC, no DST — this is only used for log timestamps (see log.cpp), not
 // anything user-facing, so there's no reason to plumb through a configurable
@@ -49,6 +50,18 @@ static const char *kMqttEventTopic = "openparcelbox/access/event";
 static const char *kMqttLastTopic = "openparcelbox/access/last";
 static const char *kHaEventDiscoveryTopic = "homeassistant/event/openparcelbox/access/config";
 static const char *kHaSensorDiscoveryTopic = "homeassistant/sensor/openparcelbox/last_access/config";
+
+// Letter flap reed contact: "open"/"closed", retained (HA binary_sensor).
+static const char *kMqttLetterFlapTopic = "openparcelbox/letter_flap";
+static const char *kHaLetterFlapDiscoveryTopic = "homeassistant/binary_sensor/openparcelbox/letter_flap/config";
+// What's been put in since the last full opening — see inbox.h for the
+// JSON format. Retained (HA sensor: state = count, list in attributes).
+static const char *kMqttInboxTopic = "openparcelbox/inbox";
+static const char *kHaInboxDiscoveryTopic = "homeassistant/sensor/openparcelbox/inbox/config";
+
+// Last flap state seen from logicTask, republished on every (re)connect.
+// -1 = not reported yet.
+static int8_t s_letterFlapState = -1;
 
 static WiFiClient s_wifiClient;
 static PubSubClient s_mqtt(s_wifiClient);
@@ -156,6 +169,37 @@ static void publishHaDiscovery() {
         size_t n = serializeJson(doc, buf, sizeof(buf));
         s_mqtt.publish(kHaSensorDiscoveryTopic, (const uint8_t *)buf, n, true);
     }
+    {
+        JsonDocument doc;
+        JsonObject root = doc.to<JsonObject>();
+        root["name"] = "Letter Flap";
+        root["unique_id"] = "openparcelbox_letter_flap";
+        root["device_class"] = "opening";
+        root["state_topic"] = kMqttLetterFlapTopic;
+        root["payload_on"] = "open";
+        root["payload_off"] = "closed";
+        addHaDevice(root);
+
+        char buf[512];
+        size_t n = serializeJson(doc, buf, sizeof(buf));
+        s_mqtt.publish(kHaLetterFlapDiscoveryTopic, (const uint8_t *)buf, n, true);
+    }
+    {
+        JsonDocument doc;
+        JsonObject root = doc.to<JsonObject>();
+        root["name"] = "Inbox";
+        root["unique_id"] = "openparcelbox_inbox";
+        root["icon"] = "mdi:mailbox";
+        root["unit_of_measurement"] = "items";
+        root["state_topic"] = kMqttInboxTopic;
+        root["value_template"] = "{{ value_json.count }}";
+        root["json_attributes_topic"] = kMqttInboxTopic;
+        addHaDevice(root);
+
+        char buf[512];
+        size_t n = serializeJson(doc, buf, sizeof(buf));
+        s_mqtt.publish(kHaInboxDiscoveryTopic, (const uint8_t *)buf, n, true);
+    }
     publishHaButtonDiscovery("homeassistant/button/openparcelbox/open_full/config",
                               "Open Full", "openparcelbox_open_full", "full");
     publishHaButtonDiscovery("homeassistant/button/openparcelbox/open_parcel/config",
@@ -186,6 +230,24 @@ static bool publishAccessEvent(const AppMessage &msg) {
         ok = s_mqtt.publish(kMqttLastTopic, (const uint8_t *)buf, n, true) && ok;
     }
     return ok;
+}
+
+static bool publishLetterFlapState() {
+    if (s_letterFlapState < 0) {
+        return true; // nothing to report yet
+    }
+    return s_mqtt.publish(kMqttLetterFlapTopic, s_letterFlapState ? "open" : "closed", true);
+}
+
+// Streamed via beginPublish() rather than publish(): the document can be
+// larger than PubSubClient's 1024-byte buffer, which publish() can't exceed.
+static void republishInbox() {
+    static char buf[INBOX_JSON_MAX_LEN];
+    size_t n = inboxSerialize(buf, sizeof(buf));
+    if (s_mqtt.beginPublish(kMqttInboxTopic, n, true)) {
+        s_mqtt.write(reinterpret_cast<const uint8_t *>(buf), n);
+        s_mqtt.endPublish();
+    }
 }
 
 // Kicks off (or re-kicks) the STA connection and returns immediately —
@@ -326,6 +388,8 @@ static void tryConnectMqttOnce(const DeviceConfig &cfg) {
         republishLogFile(kErrorLogPath, kMqttErrorLogTopic);
         republishLogFile(kAccessLogPath, kMqttAccessLogTopic);
         republishLogFile(kDeniedLogPath, kMqttDeniedLogTopic);
+        republishInbox();
+        publishLetterFlapState();
         s_wasConnected = true;
     } else {
         if (s_wasConnected) {
@@ -354,6 +418,11 @@ static void publishDirtyLogFiles() {
     }
     if (xQueueReceive(deniedLogDirtyQueue, &dummy, 0) == pdTRUE) {
         republishLogFile(kDeniedLogPath, kMqttDeniedLogTopic);
+    }
+    // Same best-effort reasoning: the inbox is persisted on-device, and is
+    // republished in full on every reconnect anyway.
+    if (xQueueReceive(inboxDirtyQueue, &dummy, 0) == pdTRUE) {
+        republishInbox();
     }
 }
 
@@ -427,14 +496,27 @@ void configSyncTaskFn(void *pvParameters) {
             haveMsg = xQueueReceive(mqttQueue, &msg, 0) == pdTRUE;
         }
 
-        if (haveMsg && (msg.event == AppEvent::ACCESS_PARCELBOX_GRANTED ||
-                        msg.event == AppEvent::ACCESS_PARCELBOX_DENIED)) {
-            if (s_mqtt.connected() && publishAccessEvent(msg)) {
+        if (haveMsg) {
+            bool done;
+            switch (msg.event) {
+                case AppEvent::ACCESS_PARCELBOX_GRANTED:
+                case AppEvent::ACCESS_PARCELBOX_DENIED:
+                    done = s_mqtt.connected() && publishAccessEvent(msg);
+                    break;
+                case AppEvent::LETTER_FLAP_CHANGED:
+                    // Recorded even while offline, so the reconnect path
+                    // above publishes the latest state.
+                    s_letterFlapState = msg.flapOpen ? 1 : 0;
+                    done = s_mqtt.connected() && publishLetterFlapState();
+                    break;
+                default:
+                    done = true; // not an event type this task publishes
+                    break;
+            }
+            // !done: leave haveMsg set, retry next loop once (re)connected.
+            if (done) {
                 haveMsg = false;
             }
-            // else: leave haveMsg set, retry next loop once (re)connected.
-        } else {
-            haveMsg = false; // not an event type this task publishes
         }
 
         vTaskDelay(pdMS_TO_TICKS(10));

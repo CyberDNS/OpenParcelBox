@@ -28,6 +28,10 @@ void logInit();
 // connection's framing until the next reconnect.
 SemaphoreHandle_t logFileMutex();
 
+// "%Y-%m-%dT%H:%M:%SZ" (UTC) once NTP has synced, "T+<uptime>ms" before
+// that. 24 bytes is enough for either.
+void formatTimestamp(char *buf, size_t bufLen);
+
 // Appends a timestamped line to /error.log (trimmed back once it grows past
 // a size cap — see log.cpp) and marks errorLogDirtyQueue so configSyncTask
 // republishes the file's full current content to MQTT. Safe to call from

@@ -5,9 +5,48 @@
 
 #include "access_control.h"
 #include "events.h"
+#include "inbox.h"
+#include "letter_flap_config.h"
 #include "../logging/log.h"
 
 static AccessConfig s_config{};
+
+// Unknown until letterFlapTask reports its startup state, so a flap that's
+// already open at boot isn't counted as a delivery.
+static bool s_flapKnown = false;
+static bool s_flapOpen = false;
+static bool s_haveFlapActivity = false;
+static uint32_t s_lastFlapActivityMs = 0;
+
+// A parcel-only grant means something was (probably) dropped off; a full
+// grant means the resident is emptying the box, so the list starts over.
+static void updateInboxForGrant(const AppMessage &grant) {
+    if (grant.scope == AccessScope::FULL) {
+        inboxClear();
+    } else {
+        inboxAdd(InboxItemType::PARCEL, grant.accessId);
+    }
+}
+
+static void handleLetterFlap(const AppMessage &msg) {
+    bool wasClosed = s_flapKnown && !s_flapOpen;
+    s_flapKnown = true;
+    s_flapOpen = msg.flapOpen;
+
+    uint32_t now = millis();
+    if (msg.flapOpen && wasClosed) {
+        // Measured from the last change in either direction, not the last
+        // opening: a flap held open for a while and then bouncing open
+        // again as it shuts must still count as one delivery.
+        if (!s_haveFlapActivity || now - s_lastFlapActivityMs >= LETTER_FLAP_COALESCE_MS) {
+            inboxAdd(InboxItemType::LETTER, nullptr);
+        }
+    }
+    s_haveFlapActivity = true;
+    s_lastFlapActivityMs = now;
+
+    xQueueSend(mqttQueue, &msg, 0);
+}
 
 static void handleMessage(const AppMessage &msg) {
     switch (msg.event) {
@@ -25,6 +64,7 @@ static void handleMessage(const AppMessage &msg) {
             logAccess(accessId, scope, ok);
             if (ok) {
                 xQueueSend(servoQueue, &out, 0);
+                updateInboxForGrant(out);
             }
             xQueueSend(mqttQueue, &out, 0);
             break;
@@ -45,6 +85,7 @@ static void handleMessage(const AppMessage &msg) {
             xQueueSend(servoQueue, &out, 0);
             xQueueSend(mqttQueue, &out, 0);
             logAccess(out.accessId, out.scope, true);
+            updateInboxForGrant(out);
             break;
         }
         case AppEvent::REMOTE_OPEN_REQUESTED: {
@@ -60,6 +101,7 @@ static void handleMessage(const AppMessage &msg) {
             xQueueSend(servoQueue, &out, 0);
             xQueueSend(mqttQueue, &out, 0);
             logAccess(out.accessId, out.scope, true);
+            updateInboxForGrant(out);
             break;
         }
         case AppEvent::CONFIG_UPDATED: {
@@ -72,6 +114,9 @@ static void handleMessage(const AppMessage &msg) {
             xQueueSend(uiQueue, &out, 0);
             break;
         }
+        case AppEvent::LETTER_FLAP_CHANGED:
+            handleLetterFlap(msg);
+            break;
         default:
             break;
     }

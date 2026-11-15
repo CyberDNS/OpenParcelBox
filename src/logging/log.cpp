@@ -54,7 +54,7 @@ static void markDirty(QueueHandle_t queue) {
 // counts up from the epoch from boot, which would print a confusing
 // "1970-01-01" — so fall back to millis() uptime instead, which is at
 // least honestly labeled as relative.
-static void formatTimestamp(char *buf, size_t bufLen) {
+void formatTimestamp(char *buf, size_t bufLen) {
     time_t now = time(nullptr);
     if (now > 1700000000) { // sometime in 2023 — well past any un-synced clock's value
         struct tm tmInfo;
